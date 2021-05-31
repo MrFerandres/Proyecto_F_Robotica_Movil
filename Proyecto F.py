@@ -8,6 +8,11 @@ import sim as vrep # access all the VREP elements
 from skimage.draw import line
 import threading
 
+global carprio #Cosa de hilos
+carprio=[]
+for i in range(6):
+    carprio.append([])
+
 def angdiff(t1, t2):
     """
     Compute the angle difference, t2-t1, restricting the result to the [-pi,pi] range
@@ -26,6 +31,7 @@ class myRobot(threading.Thread):
         self.clientID=client
         self.id=numb
         self.usensor =[]
+
         if(self.id==-1):
             print('Inicializando robot y motores del robot {}'.format(self.id+1))
             eer, self.robot=vrep.simxGetObjectHandle(self.clientID, 'Pioneer_p3dx', vrep.simx_opmode_blocking)
@@ -48,21 +54,28 @@ class myRobot(threading.Thread):
             err, state, point, detectedObj, detectedSurfNormVec = vrep.simxReadProximitySensor(self.clientID, self.usensor[i], vrep.simx_opmode_streaming)
         self.puntox = []
         self.puntoy = []
-        for i in range(1):
+        for i in range(6):
             self.puntox.append(random.uniform(-5.5,5.5))
             self.puntoy.append(random.uniform(-5.5,5.5))
         print('El robot {}, tendra que pasar por los puntos\nx={}\ny={}\n'.format(self.id+1,self.puntox,self.puntoy))
 
-
-
+        #Datos para los hilos
+        ret, carpos = vrep.simxGetObjectPosition(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
+        carprio[self.id + 1].append(self.id + 1) # id del robot
+        carprio[self.id + 1].append(carpos[0])  # posicion en x
+        carprio[self.id + 1].append(carpos[1])  # posicion en y
+        carprio[self.id + 1].append(False)  # estado del robot (frenado porque tiene que esperar)
+        carprio[self.id + 1].append(False)   # ya acabo todos los puntos?
 
     def run(self):
-        print('inicia hilo para el robot {}'.format(self.id+1))
+        print('inicia hilo para el robot {}\n{}'.format(self.id+1,carprio[self.id+1]))
         ret, carpos = vrep.simxGetObjectPosition(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
         ret, carrot = vrep.simxGetObjectOrientation(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
         for i in range(len(self.puntox)):
             self.errp=10
-            while self.errp>0.1:
+            while self.errp>0.5:
+                carprio[self.id +1][3] = False
+
                 ret, carpos = vrep.simxGetObjectPosition(self.clientID, self.robot, -1, vrep.simx_opmode_buffer)
                 ret, carrot = vrep.simxGetObjectOrientation(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
                 #print(self.errp)
@@ -73,8 +86,40 @@ class myRobot(threading.Thread):
                     difx = (self.puntox[i] - carpos[0]) ** 2
                     dify = (self.puntoy[i] - carpos[1]) ** 2
                 self.errp = m.sqrt(difx + dify)
+                carprio[self.id + 1][1]=carpos[0]
+                carprio[self.id + 1][2] = carpos[1]
+
                 angd = m.atan2(self.puntoy[i] - carpos[1], self.puntox[i] - carpos[0])
                 errh = angdiff(carrot[2], angd)
+
+                #Si el sensor detecta algo, nos dice con quien se detecto
+                for j in range(1,7):
+                    err, state, point, detectedObj, detectedSurfNormVec = vrep.simxReadProximitySensor(self.clientID,self.usensor[j],vrep.simx_opmode_buffer)
+                    if state == True:
+                        #print('el sensor {} del robot {}, detecto un objeto'.format(j + 1, self.id + 1))
+                        for k in range(6):
+                            if k==self.id+1:
+                                continue
+                            distancia=m.sqrt((carprio[k][1]-carprio[self.id+1][1])**2+(carprio[k][2]-carprio[self.id+1][2])**2)
+                            if distancia<0.75 and (self.id<k and carprio[k][4]==False):
+                                t = time.time()
+                                while time.time() - t < 2:
+                                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, -1,vrep.simx_opmode_streaming)
+                                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, -1,vrep.simx_opmode_streaming)
+                                errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0,vrep.simx_opmode_streaming)
+                                errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0,vrep.simx_opmode_streaming)
+                            elif distancia <0.5:
+                                carprio[self.id +1][3] = True
+                            elif distancia<1:
+                                #print('el robot {} se topo con el robot {}'.format(k,self.id+1))
+                                if (self.id<k and carprio[k][4]==False):
+                                    carprio[self.id +1][3] = True
+                                else:
+                                    carprio[self.id +1][3] = False
+                if carprio[self.id +1][3]:
+                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0, vrep.simx_opmode_streaming)
+                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0, vrep.simx_opmode_streaming)
+                    continue
 
                 Kv = 0.5
                 Kh = 2.5
@@ -97,7 +142,7 @@ class myRobot(threading.Thread):
 
 
                 #print('\nrobot {}\nrot del robot {}\npos del robot {}\n'.format(self.id+1,carrot,carpos))
-            print('Se encontro el punto:x={}||y={} del robot {} con un errp de ={}\nUbicacion del robot x={}\ny={}'.format(self.puntox,self.puntoy,self.id+1,self.errp,carpos[0],carpos[1]))
+            print('Se encontro el punto:x={}||y={} \nDel robot {} con un errp de ={}\nUbicacion del robot x={}\ny={}'.format(self.puntox[i],self.puntoy[i],self.id+1,self.errp,carpos[0],carpos[1]))
             print('xd={}\nyd={}\nsqrt={}\n'.format((self.puntox[i] - carpos[0]) ** 2,(self.puntoy[i] - carpos[1]) ** 2,m.sqrt((self.puntox[i] - carpos[0]) ** 2 + (self.puntoy[i] - carpos[1]) ** 2)))
         errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0, vrep.simx_opmode_streaming)
         errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0, vrep.simx_opmode_streaming)
@@ -114,7 +159,34 @@ class myRobot(threading.Thread):
         ret, carrot = vrep.simxGetObjectOrientation(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
         print('\nrobot {}\nrot del robot {}\npos del robot {}\n'.format(self.id + 1, abs(carrot[2]*180/m.pi), carpos))
         """
-        print('\n\nTermina hilo {}\n\n'.format(self.id + 1))
+        print('El robot {}, ya acabo de navegar todos los puntos'.format(self.id))
+        carprio[self.id + 1][4]=True
+        for k in range(6):
+            while not carprio[k][4]:
+                for i in range(8):
+                    err, state, point, detectedObj, detectedSurfNormVec = vrep.simxReadProximitySensor(self.clientID,self.usensor[i],vrep.simx_opmode_buffer)
+                    if state == True:
+                        t=time.time()
+                        while time.time() - t < 2:
+                            errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, -1,vrep.simx_opmode_streaming)
+                            errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, -1,vrep.simx_opmode_streaming)
+                        errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0,vrep.simx_opmode_streaming)
+                        errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0,vrep.simx_opmode_streaming)
+
+
+
+                for i in range(8,16):
+                    err, state, point, detectedObj, detectedSurfNormVec = vrep.simxReadProximitySensor(self.clientID,self.usensor[i],vrep.simx_opmode_buffer)
+                    if state == True:
+                        t = time.time()
+                        while time.time() - t < 2:
+                            errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL,  1,vrep.simx_opmode_streaming)
+                            errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR,  1,vrep.simx_opmode_streaming)
+                        errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0,vrep.simx_opmode_streaming)
+                        errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0,vrep.simx_opmode_streaming)
+
+
+        print('\n\nTermina hilo {} con la info de carprio ={}\n\n'.format(self.id + 1,carprio[self.id + 1]))
 
 
 
@@ -125,8 +197,7 @@ if clientID!=-1:
 else:
 	print('Not connected to remote API server')
 	sys.exit("No connection")
-
-
+print(carprio)
 
 
 robot0=myRobot(clientID,-1)
