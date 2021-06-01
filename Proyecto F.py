@@ -1,3 +1,4 @@
+#Version 1.0
 import numpy as np
 import time
 import math as m
@@ -73,7 +74,7 @@ class myRobot(threading.Thread):
         ret, carrot = vrep.simxGetObjectOrientation(self.clientID, self.robot, -1, vrep.simx_opmode_streaming)
         for i in range(len(self.puntox)):
             self.errp=10
-            while self.errp>0.5:
+            while self.errp>0.6:
                 carprio[self.id +1][3] = False
 
                 ret, carpos = vrep.simxGetObjectPosition(self.clientID, self.robot, -1, vrep.simx_opmode_buffer)
@@ -97,10 +98,12 @@ class myRobot(threading.Thread):
                     err, state, point, detectedObj, detectedSurfNormVec = vrep.simxReadProximitySensor(self.clientID,self.usensor[j],vrep.simx_opmode_buffer)
                     if state == True:
                         #print('el sensor {} del robot {}, detecto un objeto'.format(j + 1, self.id + 1))
+
                         for k in range(6):
                             if k==self.id+1:
                                 continue
                             distancia=m.sqrt((carprio[k][1]-carprio[self.id+1][1])**2+(carprio[k][2]-carprio[self.id+1][2])**2)
+
                             if distancia<0.75 and (self.id<k and carprio[k][4]==False):
                                 t = time.time()
                                 while time.time() - t < 2:
@@ -116,6 +119,14 @@ class myRobot(threading.Thread):
                                     carprio[self.id +1][3] = True
                                 else:
                                     carprio[self.id +1][3] = False
+                            elif (j== 1 or j== 2 or j==3 or j==4 or j==5 or j== 6)and abs(point[2])<0.25:
+                                t=time.time()
+                                while time.time() -t < 2.5/12:
+                                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 1.0,vrep.simx_opmode_streaming)
+                                    errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR,-1.0,vrep.simx_opmode_streaming)
+                                errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0,vrep.simx_opmode_streaming)
+                                errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0,vrep.simx_opmode_streaming)
+                                carprio[self.id + 1][3] = True
                 if carprio[self.id +1][3]:
                     errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorL, 0, vrep.simx_opmode_streaming)
                     errf = vrep.simxSetJointTargetVelocity(self.clientID, self.motorR, 0, vrep.simx_opmode_streaming)
